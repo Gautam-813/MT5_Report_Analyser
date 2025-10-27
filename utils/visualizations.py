@@ -723,3 +723,326 @@ def create_pnl_by_months_chart(trades_df, theme='light'):
         )
     
     return fig
+
+def create_weekly_hourly_heatmap(trades_df, theme='light'):
+    """
+    Create weekly pattern heatmap showing profit/loss by hour and day of week
+    
+    Args:
+        trades_df: DataFrame with trade data
+        theme: 'light' or 'dark'
+    
+    Returns:
+        Plotly figure object
+    """
+    if trades_df.empty or 'time' not in trades_df.columns or 'profit' not in trades_df.columns:
+        return go.Figure()
+    
+    # Prepare data
+    df = trades_df.copy()
+    
+    # Ensure profit column is numeric
+    if 'profit' in df.columns:
+        df['profit'] = pd.to_numeric(df['profit'], errors='coerce').fillna(0)
+    
+    df['hour'] = df['time'].dt.hour
+    df['day_of_week'] = df['time'].dt.day_name()
+    
+    # Define day order
+    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    
+    # Create pivot table: hours as rows, days as columns
+    pivot_data = df.groupby(['hour', 'day_of_week'])['profit'].sum().unstack(fill_value=0)
+    
+    # Ensure all days are present and in correct order
+    pivot_data = pivot_data.reindex(columns=days_order, fill_value=0)
+    
+    # Ensure all hours are present (0-23)
+    all_hours = list(range(24))
+    pivot_data = pivot_data.reindex(all_hours, fill_value=0)
+    
+    # Create hour labels
+    hour_labels = [f"{h:02d}:00-{h+1:02d}:00" for h in all_hours]
+    
+    # Create custom hover text
+    hover_text = []
+    for i, hour in enumerate(all_hours):
+        hover_row = []
+        for day in days_order:
+            profit = pivot_data.loc[hour, day]
+            try:
+                # Safely format profit value
+                profit_str = f"${float(profit):.2f}" if pd.notna(profit) else "$0.00"
+            except (ValueError, TypeError):
+                profit_str = "$0.00"
+            hover_row.append(f"Day: {day}<br>Hour: {hour_labels[i]}<br>Profit: {profit_str}")
+        hover_text.append(hover_row)
+    
+    # Create text with dynamic colors for better visibility
+    text_values = pivot_data.values.round(2)
+    
+    # Create dynamic text colors based on cell values
+    text_colors = []
+    for row in pivot_data.values:
+        color_row = []
+        for val in row:
+            if abs(val) < 10:  # Small values - use dark text
+                color_row.append('black')
+            elif val > 0:  # Positive values - use white text on green
+                color_row.append('white')
+            else:  # Negative values - use white text on red
+                color_row.append('white')
+        text_colors.append(color_row)
+    
+    # Create heatmap with improved visibility
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot_data.values,
+        x=pivot_data.columns,  # Days
+        y=hour_labels,  # Hours
+        colorscale=[
+            [0.0, '#d73027'],    # Dark red for losses
+            [0.2, '#f46d43'],    # Light red
+            [0.4, '#fdae61'],    # Orange
+            [0.5, '#ffffbf'],    # Light yellow (neutral)
+            [0.6, '#abd9e9'],    # Light blue
+            [0.8, '#74add1'],    # Blue
+            [1.0, '#313695']     # Dark blue for profits
+        ],
+        zmid=0,  # Center colorscale at zero
+        text=text_values,
+        texttemplate="$%{text}",
+        textfont={
+            "size": 12,
+            "family": "Arial Black, sans-serif"
+        },
+        hoverongaps=False,
+        hovertemplate='%{customdata}<extra></extra>',
+        customdata=hover_text,
+        showscale=True,
+        colorbar=dict(
+            title=dict(
+                text="Profit/Loss ($)"
+            ),
+            tickmode="linear",
+            tick0=0,
+            dtick=50
+        )
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': "🔄 Weekly Trading Pattern Analysis<br><sub>Recurring patterns by day of week and hour</sub>",
+            'x': 0.5,
+            'xanchor': 'center'
+        },
+        xaxis_title="Day of Week",
+        yaxis_title="Hour of Day (UTC)",
+        height=600,
+        width=800
+    )
+    
+    # Apply theme
+    if theme == 'dark':
+        fig.update_layout(
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font_color='white',
+            title_font_color='white'
+        )
+    else:
+        fig.update_layout(
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            font_color='black',
+            title_font_color='black'
+        )
+    
+    return fig
+
+
+def create_daily_hourly_heatmap(trades_df, start_date=None, end_date=None, theme='light'):
+    """
+    Create daily timeline heatmap showing profit/loss by hour and specific dates
+    
+    Args:
+        trades_df: DataFrame with trade data
+        start_date: Start date for filtering (datetime or string)
+        end_date: End date for filtering (datetime or string)
+        theme: 'light' or 'dark'
+    
+    Returns:
+        Plotly figure object
+    """
+    if trades_df.empty or 'time' not in trades_df.columns or 'profit' not in trades_df.columns:
+        return go.Figure()
+    
+    # Prepare data
+    df = trades_df.copy()
+    
+    # Ensure profit column is numeric
+    if 'profit' in df.columns:
+        df['profit'] = pd.to_numeric(df['profit'], errors='coerce').fillna(0)
+    
+    df['date'] = df['time'].dt.date
+    df['hour'] = df['time'].dt.hour
+    
+    # Filter by date range if provided
+    if start_date is not None:
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date).date()
+        df = df[df['date'] >= start_date]
+    
+    if end_date is not None:
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date).date()
+        df = df[df['date'] <= end_date]
+    
+    if df.empty:
+        return go.Figure()
+    
+    # Create pivot table: hours as rows, dates as columns
+    pivot_data = df.groupby(['hour', 'date'])['profit'].sum().unstack(fill_value=0)
+    
+    # Ensure all hours are present (0-23)
+    all_hours = list(range(24))
+    pivot_data = pivot_data.reindex(all_hours, fill_value=0)
+    
+    # Sort columns (dates) chronologically
+    pivot_data = pivot_data.reindex(sorted(pivot_data.columns), axis=1)
+    
+    # Create hour labels
+    hour_labels = [f"{h:02d}:00-{h+1:02d}:00" for h in all_hours]
+    
+    # Create date labels (format: MM-DD)
+    date_labels = [date.strftime('%m-%d') for date in pivot_data.columns]
+    
+    # Create custom hover text
+    hover_text = []
+    for i, hour in enumerate(all_hours):
+        hover_row = []
+        for j, date in enumerate(pivot_data.columns):
+            profit = pivot_data.iloc[i, j]
+            try:
+                # Safely format profit value
+                profit_str = f"${float(profit):.2f}" if pd.notna(profit) else "$0.00"
+            except (ValueError, TypeError):
+                profit_str = "$0.00"
+            hover_row.append(f"Date: {date}<br>Hour: {hour_labels[i]}<br>Profit: {profit_str}")
+        hover_text.append(hover_row)
+    
+    # Create text with dynamic colors for better visibility
+    text_values = pivot_data.values.round(2)
+    
+    # Create heatmap with improved visibility
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot_data.values,
+        x=date_labels,  # Dates
+        y=hour_labels,  # Hours
+        colorscale=[
+            [0.0, '#d73027'],    # Dark red for losses
+            [0.2, '#f46d43'],    # Light red
+            [0.4, '#fdae61'],    # Orange
+            [0.5, '#ffffbf'],    # Light yellow (neutral)
+            [0.6, '#abd9e9'],    # Light blue
+            [0.8, '#74add1'],    # Blue
+            [1.0, '#313695']     # Dark blue for profits
+        ],
+        zmid=0,  # Center colorscale at zero
+        text=text_values,
+        texttemplate="$%{text}",
+        textfont={
+            "size": 10,
+            "family": "Arial Black, sans-serif"
+        },
+        hoverongaps=False,
+        hovertemplate='%{customdata}<extra></extra>',
+        customdata=hover_text,
+        showscale=True,
+        colorbar=dict(
+            title=dict(
+                text="Profit/Loss ($)"
+            ),
+            tickmode="linear",
+            tick0=0,
+            dtick=50
+        )
+    ))
+    
+    # Update layout with scrollable x-axis
+    fig.update_layout(
+        title={
+            'text': f"📅 Daily Timeline Analysis ({start_date or 'All'} - {end_date or 'All'})<br><sub>Specific date performance | Scroll horizontally for more dates</sub>",
+            'x': 0.5,
+            'xanchor': 'center'
+        },
+        xaxis_title="Date (MM-DD)",
+        yaxis_title="Hour of Day (UTC)",
+        height=600,
+        width=1200,  # Wide to accommodate scrolling
+        xaxis=dict(
+            rangeslider=dict(visible=True),  # Enable horizontal scrolling
+            type="category"
+        )
+    )
+    
+    # Apply theme
+    if theme == 'dark':
+        fig.update_layout(
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font_color='white',
+            title_font_color='white'
+        )
+    else:
+        fig.update_layout(
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            font_color='black',
+            title_font_color='black'
+        )
+    
+    return fig
+
+
+def create_heatmap_analysis_section(trades_df, theme='light'):
+    """
+    Create complete heatmap analysis with both weekly and daily views
+    
+    Args:
+        trades_df: DataFrame with trade data
+        theme: 'light' or 'dark'
+    
+    Returns:
+        Tuple of (weekly_fig, daily_fig, date_range_info)
+    """
+    if trades_df.empty:
+        return go.Figure(), go.Figure(), {}
+    
+    # Get date range info
+    min_date = trades_df['time'].min().date()
+    max_date = trades_df['time'].max().date()
+    total_days = (max_date - min_date).days + 1
+    
+    date_range_info = {
+        'min_date': min_date,
+        'max_date': max_date,
+        'total_days': total_days,
+        'suggested_ranges': {
+            'last_week': max_date - pd.Timedelta(days=7),
+            'last_month': max_date - pd.Timedelta(days=30),
+            'last_quarter': max_date - pd.Timedelta(days=90)
+        }
+    }
+    
+    # Create weekly pattern heatmap
+    weekly_fig = create_weekly_hourly_heatmap(trades_df, theme)
+    
+    # Create daily timeline heatmap (default to last 30 days if more than 30 days of data)
+    if total_days > 30:
+        start_date = date_range_info['suggested_ranges']['last_month']
+        daily_fig = create_daily_hourly_heatmap(trades_df, start_date, max_date, theme)
+    else:
+        daily_fig = create_daily_hourly_heatmap(trades_df, min_date, max_date, theme)
+    
+    return weekly_fig, daily_fig, date_range_info
