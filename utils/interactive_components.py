@@ -10,6 +10,27 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 
+def safe_float(value, default=0.0):
+    """Safely convert value to float, handling strings and other types"""
+    if value is None:
+        return default
+    
+    try:
+        # If it's already a number, return it
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        # If it's a string, try to convert
+        if isinstance(value, str):
+            # Remove common formatting characters
+            cleaned = value.replace(',', '').replace(' ', '').replace('$', '').replace('%', '')
+            return float(cleaned)
+        
+        # Try direct conversion
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
 def create_interactive_equity_curve(trades_df, theme='light'):
     """Create interactive equity curve with advanced features"""
     
@@ -165,7 +186,7 @@ def create_risk_gauge_dashboard(risk_metrics):
     )
     
     # Profit Factor Gauge
-    pf = risk_metrics.get('profit_factor', 0)
+    pf = safe_float(risk_metrics.get('profit_factor', 0))
     fig.add_trace(go.Indicator(
         mode="gauge+number+delta",
         value=pf,
@@ -189,7 +210,7 @@ def create_risk_gauge_dashboard(risk_metrics):
     ), row=1, col=1)
     
     # Win Rate Gauge
-    wr = risk_metrics.get('win_rate', 0)
+    wr = safe_float(risk_metrics.get('win_rate', 0))
     fig.add_trace(go.Indicator(
         mode="gauge+number+delta",
         value=wr,
@@ -208,7 +229,7 @@ def create_risk_gauge_dashboard(risk_metrics):
     ), row=1, col=2)
     
     # Sharpe Ratio Gauge
-    sr = risk_metrics.get('sharpe_ratio', 0)
+    sr = safe_float(risk_metrics.get('sharpe_ratio', 0))
     fig.add_trace(go.Indicator(
         mode="gauge+number+delta",
         value=sr,

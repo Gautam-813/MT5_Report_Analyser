@@ -79,47 +79,83 @@ class IntelligentFeedbackEngine:
         
         for metric in key_metrics:
             if metric in risk_metrics:
-                value = risk_metrics[metric]
-                rating = TradingBenchmarks.get_performance_rating(metric, value)
-                benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
-                
-                analysis[metric] = {
-                    'value': value,
-                    'rating': rating,
-                    'benchmarks': benchmarks,
-                    'percentile': self._calculate_percentile(metric, value),
-                    'improvement_needed': self._calculate_improvement_needed(metric, value)
-                }
+                try:
+                    value = risk_metrics[metric]
+                    # Ensure value is a number
+                    if not isinstance(value, (int, float)):
+                        value = float(value) if value is not None else 0.0
+                    
+                    rating = TradingBenchmarks.get_performance_rating(metric, value)
+                    benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
+                    
+                    analysis[metric] = {
+                        'value': value,
+                        'rating': rating,
+                        'benchmarks': benchmarks,
+                        'percentile': self._calculate_percentile(metric, value),
+                        'improvement_needed': self._calculate_improvement_needed(metric, value)
+                    }
+                except (ValueError, TypeError) as e:
+                    # Skip this metric if there's a data type issue
+                    continue
         
         return analysis
     
     def _calculate_percentile(self, metric, value):
         """Calculate approximate percentile based on industry data"""
-        benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
-        
-        if value >= benchmarks['excellent']:
-            return 90 + min(10, (value - benchmarks['excellent']) / benchmarks['excellent'] * 10)
-        elif value >= benchmarks['good']:
-            return 70 + (value - benchmarks['good']) / (benchmarks['excellent'] - benchmarks['good']) * 20
-        elif value >= benchmarks['average']:
-            return 40 + (value - benchmarks['average']) / (benchmarks['good'] - benchmarks['average']) * 30
-        elif value >= benchmarks['poor']:
-            return 20 + (value - benchmarks['poor']) / (benchmarks['average'] - benchmarks['poor']) * 20
-        else:
-            return max(0, 20 * (value / benchmarks['poor']))
+        try:
+            # Ensure value is a number
+            if not isinstance(value, (int, float)):
+                value = float(value) if value is not None else 0.0
+                
+            benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
+            
+            # Ensure all benchmark values are numbers
+            excellent = float(benchmarks['excellent'])
+            good = float(benchmarks['good'])
+            average = float(benchmarks['average'])
+            poor = float(benchmarks['poor'])
+            
+            if value >= excellent:
+                return 90 + min(10, (value - excellent) / excellent * 10) if excellent != 0 else 90
+            elif value >= good:
+                return 70 + (value - good) / (excellent - good) * 20 if (excellent - good) != 0 else 70
+            elif value >= average:
+                return 40 + (value - average) / (good - average) * 30 if (good - average) != 0 else 40
+            elif value >= poor:
+                return 20 + (value - poor) / (average - poor) * 20 if (average - poor) != 0 else 20
+            else:
+                return max(0, 20 * (value / poor)) if poor != 0 else 0
+        except (ValueError, TypeError, ZeroDivisionError):
+            # Return a default percentile if calculation fails
+            return 50.0
     
     def _calculate_improvement_needed(self, metric, value):
         """Calculate how much improvement is needed to reach next level"""
-        benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
-        
-        if value >= benchmarks['excellent']:
-            return {'target': 'maintain', 'improvement': 0}
-        elif value >= benchmarks['good']:
-            return {'target': 'excellent', 'improvement': benchmarks['excellent'] - value}
-        elif value >= benchmarks['average']:
-            return {'target': 'good', 'improvement': benchmarks['good'] - value}
-        else:
-            return {'target': 'average', 'improvement': benchmarks['average'] - value}
+        try:
+            # Ensure value is a number
+            if not isinstance(value, (int, float)):
+                value = float(value) if value is not None else 0.0
+                
+            benchmarks = TradingBenchmarks.PERFORMANCE_BENCHMARKS[metric]
+            
+            # Ensure all benchmark values are numbers
+            excellent = float(benchmarks['excellent'])
+            good = float(benchmarks['good'])
+            average = float(benchmarks['average'])
+            poor = float(benchmarks['poor'])
+            
+            if value >= excellent:
+                return {'target': 'maintain', 'improvement': 0}
+            elif value >= good:
+                return {'target': 'excellent', 'improvement': excellent - value}
+            elif value >= average:
+                return {'target': 'good', 'improvement': good - value}
+            else:
+                return {'target': 'average', 'improvement': average - value}
+        except (ValueError, TypeError):
+            # Return a default improvement if calculation fails
+            return {'target': 'average', 'improvement': 0}
     
     def _generate_ranked_recommendations(self, benchmark_analysis, time_analysis, risk_analysis, risk_metrics):
         """Generate and rank recommendations by potential impact"""
@@ -321,10 +357,15 @@ class IntelligentFeedbackEngine:
     def _calculate_overall_score(self, risk_metrics):
         """Calculate overall strategy performance score (0-100)"""
         try:
-            # Weighted scoring based on key metrics
+            # Ensure metrics are numbers
             win_rate = risk_metrics.get('win_rate', 50)
             profit_factor = risk_metrics.get('profit_factor', 1.0)
             sharpe_ratio = risk_metrics.get('sharpe_ratio', 0.0)
+            
+            # Convert to float if needed
+            win_rate = float(win_rate) if not isinstance(win_rate, (int, float)) and win_rate is not None else (win_rate if isinstance(win_rate, (int, float)) else 50.0)
+            profit_factor = float(profit_factor) if not isinstance(profit_factor, (int, float)) and profit_factor is not None else (profit_factor if isinstance(profit_factor, (int, float)) else 1.0)
+            sharpe_ratio = float(sharpe_ratio) if not isinstance(sharpe_ratio, (int, float)) and sharpe_ratio is not None else (sharpe_ratio if isinstance(sharpe_ratio, (int, float)) else 0.0)
             
             # Score components (0-25 each)
             wr_score = min(25, max(0, (win_rate - 30) / 2.8))  # 30-100% range
@@ -332,7 +373,7 @@ class IntelligentFeedbackEngine:
             sr_score = min(25, max(0, (sharpe_ratio + 1) * 12.5))  # -1 to 1 range
             
             # Consistency bonus based on trade count
-            consistency_score = min(25, self.analyzer.trade_count / 20)  # Up to 500 trades
+            consistency_score = min(25, self.analyzer.trade_count / 20) if isinstance(self.analyzer.trade_count, (int, float)) else 0  # Up to 500 trades
             
             total_score = wr_score + pf_score + sr_score + consistency_score
             return round(min(100, max(0, total_score)), 1)

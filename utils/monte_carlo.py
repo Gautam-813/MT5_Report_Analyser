@@ -23,37 +23,51 @@ class MonteCarloSimulator:
         
         if self.trades_df.empty:
             return None
-        
+            
+        # For very large datasets, sample to improve performance
+        max_trades = 1000
+        if len(self.trades_df) > max_trades:
+            trades_sample = self.trades_df.sample(n=max_trades, random_state=42).reset_index(drop=True)
+        else:
+            trades_sample = self.trades_df
+            
         # Calculate trade statistics
-        returns = self.trades_df['profit'].values
+        returns = trades_sample['profit'].values
         mean_return = np.mean(returns)
         std_return = np.std(returns)
         num_trades = len(returns)
         
-        # Generate random scenarios
-        simulations = []
+        # Generate random scenarios using vectorized operations for better performance
+        # Generate all random returns at once
+        random_returns = np.random.normal(mean_return, std_return, (self.num_simulations, num_trades))
         
-        for i in range(self.num_simulations):
-            # Generate random trade sequence
-            random_returns = np.random.normal(mean_return, std_return, num_trades)
-            
-            # Calculate cumulative performance
-            cumulative = np.cumsum(random_returns)
-            
-            # Calculate key metrics for this simulation
-            final_profit = cumulative[-1]
-            max_profit = np.max(cumulative)
-            min_profit = np.min(cumulative)
-            
-            simulations.append({
-                'simulation': i,
-                'final_profit': final_profit,
-                'max_profit': max_profit,
-                'min_profit': min_profit,
-                'cumulative_path': cumulative
-            })
+        # Calculate cumulative performance for all simulations at once using vectorized operations
+        cumulative = np.cumsum(random_returns, axis=1)
         
-        self.results = pd.DataFrame(simulations)
+        # Calculate key metrics for all simulations
+        final_profits = cumulative[:, -1]
+        max_profits = np.max(cumulative, axis=1)
+        min_profits = np.min(cumulative, axis=1)
+        
+        # Create results DataFrame more efficiently
+        simulations_data = {
+            'simulation': range(self.num_simulations),
+            'final_profit': final_profits,
+            'max_profit': max_profits,
+            'min_profit': min_profits
+        }
+        
+        # Only store cumulative paths for a sample of simulations to save memory
+        sample_paths = {}
+        sample_size = min(50, self.num_simulations)
+        sample_indices = np.random.choice(self.num_simulations, sample_size, replace=False)
+        
+        for i in sample_indices:
+            sample_paths[i] = cumulative[i]
+            
+        self.results = pd.DataFrame(simulations_data)
+        self.sample_paths = sample_paths
+        
         return self.results
     
     # Removed _calculate_max_drawdown - we don't have tick data for real drawdown
@@ -106,8 +120,8 @@ class MonteCarloSimulator:
         fig = make_subplots(
             rows=2, cols=2,
             subplot_titles=(
-                'Profit Distribution', 'Drawdown Distribution',
-                'Simulation Paths (Sample)', 'Risk Metrics'
+                'Profit Distribution', 'Minimum Profit Distribution',
+                'Simulation Paths (Sample)', 'Probability of Loss'
             ),
             specs=[[{"type": "histogram"}, {"type": "histogram"}],
                    [{"type": "scatter"}, {"type": "indicator"}]]
@@ -125,36 +139,33 @@ class MonteCarloSimulator:
             row=1, col=1
         )
         
-        # Drawdown distribution histogram
+        # Minimum profit distribution histogram
         fig.add_trace(
             go.Histogram(
                 x=self.results['min_profit'],
                 nbinsx=50,
                 name='Minimum Profit',
                 marker_color='rgba(239, 68, 68, 0.7)',
-                hovertemplate='Drawdown Range: $%{x}<br>Frequency: %{y}<extra></extra>'
+                hovertemplate='Minimum Profit Range: $%{x}<br>Frequency: %{y}<extra></extra>'
             ),
             row=1, col=2
         )
         
-        # Sample simulation paths
-        sample_size = min(100, self.num_simulations)
-        sample_indices = np.random.choice(self.num_simulations, sample_size, replace=False)
-        
-        for i in sample_indices[:20]:  # Show first 20 for clarity
-            path = self.results.iloc[i]['cumulative_path']
-            fig.add_trace(
-                go.Scatter(
-                    x=list(range(len(path))),
-                    y=path,
-                    mode='lines',
-                    name=f'Sim {i}',
-                    line=dict(width=1, color='rgba(100, 100, 100, 0.3)'),
-                    showlegend=False,
-                    hovertemplate='Trade: %{x}<br>Cumulative: $%{y:,.2f}<extra></extra>'
-                ),
-                row=2, col=1
-            )
+        # Sample simulation paths (using pre-calculated paths)
+        if hasattr(self, 'sample_paths'):
+            for sim_id, path in self.sample_paths.items():
+                fig.add_trace(
+                    go.Scatter(
+                        x=list(range(len(path))),
+                        y=path,
+                        mode='lines',
+                        name=f'Sim {sim_id}',
+                        line=dict(width=1, color='rgba(100, 100, 100, 0.3)'),
+                        showlegend=False,
+                        hovertemplate='Trade: %{x}<br>Cumulative: $%{y:,.2f}<extra></extra>'
+                    ),
+                    row=2, col=1
+                )
         
         # Add actual strategy path
         actual_cumulative = self.trades_df['profit'].cumsum()
@@ -170,7 +181,7 @@ class MonteCarloSimulator:
             row=2, col=1
         )
         
-        # Risk gauge
+        # Probability of loss gauge
         risk_stats = self.get_risk_statistics()
         prob_loss = risk_stats.get('probability_of_loss', 0)
         
@@ -233,8 +244,14 @@ class MonteCarloSimulator:
 def create_monte_carlo_dashboard(trades_df, num_simulations=1000):
     """Create Monte Carlo analysis dashboard"""
     
+    # Limit simulations for better performance
+    max_simulations = 1000
+    if num_simulations > max_simulations:
+        num_simulations = max_simulations
+        st.warning(f"Limiting simulations to {max_simulations} for performance. Increase for more accuracy.")
+    
     st.markdown("### 🎲 **Monte Carlo Risk Simulation**")
-    st.markdown("*Professional risk analysis using 1000+ scenario simulations*")
+    st.markdown("*Professional risk analysis using scenario simulations*")
     
     # Create simulator
     simulator = MonteCarloSimulator(trades_df, num_simulations)
