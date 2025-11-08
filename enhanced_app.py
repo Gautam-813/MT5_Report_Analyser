@@ -51,6 +51,7 @@ from utils.visualizations import (
     create_daily_hourly_heatmap,
     create_heatmap_analysis_section
 )
+from utils.visualizations import create_daily_side_counts_chart
 
 # Professional features
 from utils.monte_carlo import MonteCarloSimulator, create_monte_carlo_dashboard
@@ -1176,7 +1177,8 @@ def create_interactive_filters(trades_df):
             "📅 Date Range",
             value=(min_date, max_date),
             min_value=min_date,
-            max_value=max_date
+            max_value=max_date,
+            key='global_date_range'
         )
     
     with col2:
@@ -1690,7 +1692,8 @@ def main():
                         "Start Date",
                         value=default_start,
                         min_value=date_info.get('min_date'),
-                        max_value=date_info.get('max_date')
+                        max_value=date_info.get('max_date'),
+                        key='daily_heatmap_start'
                     )
                 
                 with col2:
@@ -1700,7 +1703,8 @@ def main():
                         "End Date", 
                         value=default_end,
                         min_value=date_info.get('min_date'),
-                        max_value=date_info.get('max_date')
+                        max_value=date_info.get('max_date'),
+                        key='daily_heatmap_end'
                     )
                 
                 with col3:
@@ -1742,8 +1746,12 @@ def main():
                     start_date, end_date = end_date, start_date
                 
                 # Create filtered daily heatmap
-                filtered_daily_fig = create_daily_hourly_heatmap(trades_df, start_date, end_date, current_theme)
-                st.plotly_chart(filtered_daily_fig, use_container_width=True)
+                try:
+                    filtered_daily_fig = create_daily_hourly_heatmap(trades_df, start_date, end_date, current_theme)
+                    if filtered_daily_fig is not None:
+                        st.plotly_chart(filtered_daily_fig, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not create daily timeline heatmap: {str(e)}")
                 
                 # Heatmap insights
                 st.markdown("#### 💡 **Heatmap Insights**")
@@ -1988,6 +1996,127 @@ def main():
         with col4:
             avg_profit = filtered_df['profit'].mean() if 'profit' in filtered_df.columns else 0
             st.metric("Avg Profit/Trade", f"${avg_profit:.2f}")
+
+        # Side metrics summary (Buy / Sell)
+        try:
+            if analyzer is not None:
+                # Check trade types before getting summary
+                sample_trades = filtered_df.head()
+                print("DEBUG: Sample trade types:")
+                for idx, row in sample_trades.iterrows():
+                    print(f"Trade {idx}: Type={row.get('type', 'N/A')}, Profit={row.get('profit', 0)}")
+                
+                side_summary = analyzer.get_side_summary()
+                st.markdown("### 🔀 Trade Side Summary")
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                with c1:
+                    st.metric("Short Trades", side_summary.get('total_sell_trades', 0))
+                with c2:
+                    st.metric("Short Wins", side_summary.get('sell_profit_count', 0), delta_color="normal")
+                with c3:
+                    st.metric("Short Losses", side_summary.get('sell_loss_count', 0))
+                with c4:
+                    st.metric("Long Trades", side_summary.get('total_buy_trades', 0))
+                with c5:
+                    st.metric("Long Wins", side_summary.get('buy_profit_count', 0))
+                with c6:
+                    st.metric("Long Losses", side_summary.get('buy_loss_count', 0))
+
+                # Per-day breakdown with date-range selector and reactive chart/table
+                st.markdown("#### 📅 Per-day Buy/Sell Breakdown")
+                daily_side = analyzer.get_daily_side_breakdown()
+                if not daily_side.empty:
+                    # Ensure date column is datetime.date
+                    try:
+                        daily_side['date'] = pd.to_datetime(daily_side['date']).dt.date
+                    except Exception:
+                        pass
+
+                    min_date = daily_side['date'].min()
+                    max_date = daily_side['date'].max()
+
+                    # Normalize to date objects for date_input defaults
+                    min_date_ts = pd.to_datetime(min_date).date()
+                    max_date_ts = pd.to_datetime(max_date).date()
+
+                    default_start = max(min_date_ts, (pd.to_datetime(max_date) - pd.Timedelta(days=30)).date())
+
+                    col_start, col_end, col_update = st.columns([2,2,1])
+                    with col_start:
+                        start_date = st.date_input("Start Date", value=default_start, min_value=min_date_ts, max_value=max_date_ts, key='side_breakdown_start')
+                    with col_end:
+                        end_date = st.date_input("End Date", value=max_date_ts, min_value=min_date_ts, max_value=max_date_ts, key='side_breakdown_end')
+                    with col_update:
+                        if st.button("🔄 Update Range", key="update_range_btn"):
+                            st.experimental_rerun()
+
+                    # Quick range buttons
+                    q1, q2, q3, q4 = st.columns(4)
+                    with q1:
+                        if st.button("Last 7 Days", key="last_week_btn"):
+                            start_date = (pd.to_datetime(max_date) - pd.Timedelta(days=7)).date()
+                            end_date = max_date
+                    with q2:
+                        if st.button("Last 30 Days", key="last_month_btn"):
+                            start_date = (pd.to_datetime(max_date) - pd.Timedelta(days=30)).date()
+                            end_date = max_date
+                    with q3:
+                        if st.button("Last 90 Days", key="last_quarter_btn"):
+                            start_date = (pd.to_datetime(max_date) - pd.Timedelta(days=90)).date()
+                            end_date = max_date
+                    with q4:
+                        if st.button("All Time", key="all_data_btn"):
+                            start_date = min_date
+                            end_date = max_date
+
+                    # Normalize input types (handle Timestamp or date)
+                    try:
+                        if isinstance(start_date, pd.Timestamp):
+                            start_date = start_date.date()
+                        if isinstance(end_date, pd.Timestamp):
+                            end_date = end_date.date()
+                    except Exception:
+                        pass
+
+                    # Ensure start <= end
+                    if start_date > end_date:
+                        start_date, end_date = end_date, start_date
+
+                    # Filter daily_side
+                    mask = (daily_side['date'] >= start_date) & (daily_side['date'] <= end_date)
+                    daily_filtered = daily_side.loc[mask].copy()
+
+                    # Chart
+                    try:
+                        chart_fig = create_daily_side_counts_chart(daily_filtered, theme='dark')
+                        st.plotly_chart(chart_fig, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not create side counts chart: {str(e)}")
+
+                    # Format net profit columns for table
+                    display_daily_side = daily_filtered.copy()
+                    if 'buy_net_profit' in display_daily_side.columns:
+                        display_daily_side['buy_net_profit'] = display_daily_side['buy_net_profit'].apply(lambda x: f"${x:.2f}")
+                    if 'sell_net_profit' in display_daily_side.columns:
+                        display_daily_side['sell_net_profit'] = display_daily_side['sell_net_profit'].apply(lambda x: f"${x:.2f}")
+
+                    st.dataframe(display_daily_side, use_container_width=True)
+
+                    # CSV download for filtered daily data
+                    try:
+                        csv_data = daily_filtered.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Per-Day Side Breakdown (CSV)",
+                            data=csv_data,
+                            file_name=f"daily_side_breakdown_{start_date}_{end_date}.csv",
+                            mime="text/csv"
+                        )
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not create download: {str(e)}")
+                else:
+                    st.info("No per-day side breakdown available")
+        except Exception as e:
+            st.warning(f"⚠️ Could not compute side metrics: {str(e)}")
         
         # Performance gauge chart
         st.markdown("### 📊 **Performance Gauge**")
@@ -2205,11 +2334,14 @@ def main():
             # Time-based performance heatmap
             if feedback_report['time_analysis']:
                 st.markdown("### 🕐 **Optimal Trading Times**")
-                time_heatmap = visualizer.create_time_performance_heatmap(
-                    feedback_report['time_analysis']
-                )
-                if time_heatmap:
-                    st.plotly_chart(time_heatmap, use_container_width=True)
+                try:
+                    time_heatmap = visualizer.create_time_performance_heatmap(
+                        feedback_report['time_analysis']
+                    )
+                    if time_heatmap is not None:
+                        st.plotly_chart(time_heatmap, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not create time performance heatmap: {str(e)}")
         
         with feedback_tab4:
             st.markdown("### 🔍 **Detailed Analysis Insights**")
