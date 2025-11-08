@@ -130,6 +130,71 @@ def _create_daily_pnl_heatmap_figure(df, theme):
     
     return fig
 
+def create_daily_side_counts_chart(daily_side_df, theme='light'):
+    """Create a stacked bar chart showing buy vs sell counts per day.
+
+    Args:
+        daily_side_df: DataFrame with columns ['date','buy_count','sell_count'] (date may be datetime.date)
+        theme: 'light' or 'dark'
+
+    Returns:
+        Plotly Figure
+    """
+    if daily_side_df is None or daily_side_df.empty:
+        return go.Figure()
+
+    # Copy and ensure date type
+    df = daily_side_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(df['date']):
+        try:
+            df['date'] = pd.to_datetime(df['date'])
+        except Exception:
+            # If conversion fails, coerce to string
+            df['date'] = df['date'].astype(str)
+
+    # Sort by date
+    try:
+        df = df.sort_values('date')
+    except Exception:
+        pass
+
+    # Create stacked bar traces
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df['date'],
+        y=df.get('buy_count', pd.Series([0]*len(df))),
+        name='Buy Count',
+        marker_color='#60a5fa',
+        text=df.get('buy_count', pd.Series([0]*len(df))),
+        textposition='auto'
+    ))
+
+    fig.add_trace(go.Bar(
+        x=df['date'],
+        y=df.get('sell_count', pd.Series([0]*len(df))),
+        name='Sell Count',
+        marker_color='#f97316',
+        text=df.get('sell_count', pd.Series([0]*len(df))),
+        textposition='auto'
+    ))
+
+    # Layout
+    fig.update_layout(
+        barmode='stack',
+        title='Daily Buy vs Sell Counts',
+        xaxis_title='Date',
+        yaxis_title='Number of Trades',
+        height=420,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+
+    if theme == 'dark':
+        fig.update_layout(plot_bgcolor='#0f172a', paper_bgcolor='#0f172a', font_color='#f1f5f9')
+    else:
+        fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font_color='black')
+
+    return fig
+
 
 def create_daily_pnl_heatmap(daily_stats, theme='light'):
     """Create daily P&L heatmap calendar with improved financial color scheme"""
@@ -468,6 +533,24 @@ def create_metrics_gauge_chart(risk_metrics, theme='light'):
     if not risk_metrics:
         return go.Figure()
     
+    def _safe_num(val, default=0.0):
+        """Convert a value to float safely. Strips common artifacts like % and commas."""
+        try:
+            if val is None:
+                return float(default)
+            # If it's a string, try to clean it
+            if isinstance(val, str):
+                v = val.replace('%', '').replace(',', '').strip()
+                return float(v) if v != '' else float(default)
+            # Use pandas to coerce other types
+            num = pd.to_numeric(val, errors='coerce')
+            return float(num) if pd.notna(num) else float(default)
+        except Exception:
+            try:
+                return float(val)
+            except Exception:
+                return float(default)
+    
     fig = make_subplots(
         rows=2, cols=2,
         specs=[[{"type": "indicator"}, {"type": "indicator"}],
@@ -478,7 +561,7 @@ def create_metrics_gauge_chart(risk_metrics, theme='light'):
     # Win Rate Gauge
     fig.add_trace(go.Indicator(
         mode="gauge+number",
-        value=risk_metrics.get('win_rate', 0),
+        value=_safe_num(risk_metrics.get('win_rate', 0)),
         domain={'x': [0, 1], 'y': [0, 1]},
         title={'text': "Win Rate (%)"},
         gauge={'axis': {'range': [None, 100]},
@@ -492,7 +575,7 @@ def create_metrics_gauge_chart(risk_metrics, theme='light'):
     # Profit Factor Gauge
     fig.add_trace(go.Indicator(
         mode="gauge+number",
-        value=risk_metrics.get('profit_factor', 0),
+        value=_safe_num(risk_metrics.get('profit_factor', 0)),
         domain={'x': [0, 1], 'y': [0, 1]},
         title={'text': "Profit Factor"},
         gauge={'axis': {'range': [0, 3]},
@@ -506,7 +589,7 @@ def create_metrics_gauge_chart(risk_metrics, theme='light'):
     # Sharpe Ratio Gauge
     fig.add_trace(go.Indicator(
         mode="gauge+number",
-        value=risk_metrics.get('sharpe_ratio', 0),
+        value=_safe_num(risk_metrics.get('sharpe_ratio', 0)),
         domain={'x': [0, 1], 'y': [0, 1]},
         title={'text': "Sharpe Ratio"},
         gauge={'axis': {'range': [-2, 3]},
@@ -518,7 +601,7 @@ def create_metrics_gauge_chart(risk_metrics, theme='light'):
     ), row=2, col=1)
     
     # Risk-Reward Ratio (proper trading metric)
-    rr_ratio = risk_metrics.get('risk_reward_ratio', 0)
+    rr_ratio = _safe_num(risk_metrics.get('risk_reward_ratio', 0))
     fig.add_trace(go.Indicator(
         mode="gauge+number",
         value=rr_ratio,

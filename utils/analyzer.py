@@ -358,6 +358,159 @@ class MT5DataAnalyzer:
             return round(avg_win / avg_loss, 2) if avg_loss > 0 else 0.0
         except:
             return 0.0
+
+    # -----------------------------
+    # Side metrics (buy/sell) helpers
+    # -----------------------------
+    def _normalize_side(self, t):
+        """Normalize various type/side strings to 'buy' or 'sell' or None."""
+        try:
+            if t is None:
+                return None
+            txt = str(t).lower()
+            
+            # Handle MT5's specific trade type format
+            if txt.endswith('_close'):
+                # For close operations, we need to invert the type
+                if 'sell' in txt:
+                    return 'buy'  # closing a sell means it was originally a buy
+                elif 'buy' in txt:
+                    return 'sell'  # closing a buy means it was originally a sell
+            
+            # For open operations or simple types
+            if 'buy' in txt or 'short' in txt:  # MT5 shows short as buy
+                return 'sell'  # short trades are sell operations
+            if 'sell' in txt or 'long' in txt:  # MT5 shows long as sell
+                return 'buy'   # long trades are buy operations
+            
+            # Split and check for buy/sell in parts
+            parts = txt.split('_')
+            if 'buy' in parts:
+                return 'buy'
+            if 'sell' in parts:
+                return 'sell'
+            
+            return None
+        except Exception as e:
+            print(f"DEBUG: Error normalizing side: {str(e)}")
+            return None
+
+    def get_side_summary(self, include_net=True, unknown_policy='ignore'):
+        """Return a dict summarizing buy/sell counts and profit/loss counts.
+
+        include_net: include net profit per side
+        unknown_policy: 'ignore' or 'count' (whether to include unknown side rows)
+        """
+        if self.trades_df.empty:
+            return {
+                'total_buy_trades': 0,
+                'total_sell_trades': 0,
+                'buy_profit_count': 0,
+                'buy_loss_count': 0,
+                'sell_profit_count': 0,
+                'sell_loss_count': 0,
+                'buy_net_profit': 0.0,
+                'sell_net_profit': 0.0
+            }
+
+        # Create a temporary side series
+        side_series = self.trades_df.get('type', pd.Series([None]*len(self.trades_df)))
+        side = side_series.apply(self._normalize_side)
+
+        df = self.trades_df.copy()
+        df['__side__'] = side
+
+        if unknown_policy == 'ignore':
+            df = df[df['__side__'].isin(['buy', 'sell'])]
+
+        buy_df = df[df['__side__'] == 'buy']
+        sell_df = df[df['__side__'] == 'sell']
+
+        total_buy = int(len(buy_df))
+        total_sell = int(len(sell_df))
+        buy_profit_count = int((buy_df['profit'] > 0).sum())
+        buy_loss_count = int((buy_df['profit'] < 0).sum())
+        sell_profit_count = int((sell_df['profit'] > 0).sum())
+        sell_loss_count = int((sell_df['profit'] < 0).sum())
+
+        buy_net = float(buy_df['profit'].sum()) if include_net else 0.0
+        sell_net = float(sell_df['profit'].sum()) if include_net else 0.0
+
+        return {
+            'total_buy_trades': total_buy,
+            'total_sell_trades': total_sell,
+            'buy_profit_count': buy_profit_count,
+            'buy_loss_count': buy_loss_count,
+            'sell_profit_count': sell_profit_count,
+            'sell_loss_count': sell_loss_count,
+            'buy_net_profit': round(buy_net, 2),
+            'sell_net_profit': round(sell_net, 2)
+        }
+
+    def get_daily_side_breakdown(self, include_net=True, unknown_policy='ignore'):
+        """Return a DataFrame with per-day counts and profit sums broken down by side.
+
+        Columns produced:
+          date, buy_count, buy_profit_count, buy_loss_count, buy_net_profit,
+                      sell_count, sell_profit_count, sell_loss_count, sell_net_profit
+        """
+        if self.trades_df.empty:
+            return pd.DataFrame()
+
+        side_series = self.trades_df.get('type', pd.Series([None]*len(self.trades_df)))
+        side = side_series.apply(self._normalize_side)
+
+        df = self.trades_df.copy()
+        df['__side__'] = side
+        df['date'] = df['time'].dt.date
+
+        if unknown_policy == 'ignore':
+            df = df[df['__side__'].isin(['buy', 'sell'])]
+
+        # Group by date and side
+        grouped = df.groupby(['date', '__side__']).agg(
+            count=('profit', 'count'),
+            profit_sum=('profit', 'sum'),
+            profit_pos_count=('is_win', 'sum'),
+            profit_neg_count=('is_loss', 'sum')
+        )
+
+        # Unstack side to columns
+        unstacked = grouped.unstack(fill_value=0)
+
+        # Helper to safely get values
+        def _get(col, side_name, agg_name):
+            try:
+                return unstacked[(agg_name, side_name)]
+            except Exception:
+                # Return zeros series aligned to index
+                return pd.Series(0, index=unstacked.index)
+
+        daily = pd.DataFrame()
+        daily['date'] = unstacked.index
+        daily = daily.set_index('date')
+
+        daily['buy_count'] = _get('count', 'buy', 'count')
+        daily['buy_profit_count'] = _get('profit_pos_count', 'buy', 'profit_pos_count')
+        daily['buy_loss_count'] = _get('profit_neg_count', 'buy', 'profit_neg_count')
+        daily['buy_net_profit'] = _get('profit_sum', 'buy', 'profit_sum') if include_net else 0.0
+
+        daily['sell_count'] = _get('count', 'sell', 'count')
+        daily['sell_profit_count'] = _get('profit_pos_count', 'sell', 'profit_pos_count')
+        daily['sell_loss_count'] = _get('profit_neg_count', 'sell', 'profit_neg_count')
+        daily['sell_net_profit'] = _get('profit_sum', 'sell', 'profit_sum') if include_net else 0.0
+
+        # Reset index for display
+        daily = daily.reset_index()
+
+        # Ensure numeric columns are properly typed
+        numeric_cols = ['buy_count', 'buy_profit_count', 'buy_loss_count', 'buy_net_profit',
+                        'sell_count', 'sell_profit_count', 'sell_loss_count', 'sell_net_profit']
+        for c in numeric_cols:
+            if c in daily.columns:
+                daily[c] = pd.to_numeric(daily[c], errors='coerce').fillna(0)
+
+        return daily
     
     def get_win_streaks(self):
         """Get all winning streaks"""
